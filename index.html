@@ -1,0 +1,552 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Bazilika 排班</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@500;700&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: sticky toolbar → week grid (people × days, the main board) → day timeline (11:00–23:00) with coverage + rule checks */
+:root{
+  --bg:#f3f5f2; --surface:#ffffff; --surface-2:#f8f9f7; --ink:#1b2320; --muted:#6a746f; --line:#e1e5e0;
+  --accent:#2d5b4e; --accent-soft:#e3ece8; --hu:#3a4ea6; --hu-soft:#e6e9f7;
+  --ok:#2f8a5b; --warn:#c48a1a; --bad:#c2453b; --bad-soft:#f8e4e1; --warn-soft:#f7eedb;
+  --shadow:0 1px 2px rgba(20,30,25,.06),0 8px 24px rgba(20,30,25,.06);
+  --f-display:"Zen Kaku Gothic New","Noto Sans SC",system-ui,sans-serif;
+  --f-body:"Noto Sans SC",system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+  --ease:cubic-bezier(.2,.8,.2,1);
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#111413; --surface:#191d1c; --surface-2:#1e2321; --ink:#e7ebe8; --muted:#8e9893; --line:#2a302d;
+  --accent:#74b49f; --accent-soft:#213430; --hu:#93a3f2; --hu-soft:#252b46;
+  --ok:#5cc08b; --warn:#e2ad48; --bad:#ec7a6f; --bad-soft:#3a2321; --warn-soft:#352c19;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.25); color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#111413; --surface:#191d1c; --surface-2:#1e2321; --ink:#e7ebe8; --muted:#8e9893; --line:#2a302d;
+  --accent:#74b49f; --accent-soft:#213430; --hu:#93a3f2; --hu-soft:#252b46;
+  --ok:#5cc08b; --warn:#e2ad48; --bad:#ec7a6f; --bad-soft:#3a2321; --warn-soft:#352c19;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.25); color-scheme:dark}
+
+*{box-sizing:border-box}
+:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html{-webkit-text-size-adjust:100%}
+body{margin:0}
+img{max-width:100%}
+[hidden]{display:none!important}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:14px;line-height:1.5;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:0 48px}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--bg)}
+.wrap{max-width:1180px;margin:0 auto;display:flex;flex-direction:column;gap:20px}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.mono{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+
+/* header */
+header.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);padding-block:16px 12px;display:flex;flex-wrap:wrap;gap:12px 20px;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line)}
+.brand{display:flex;flex-direction:column;gap:2px;min-width:0}
+.brand small{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.brand h1{font-family:var(--f-display);font-size:22px;font-weight:700;margin:0;letter-spacing:.02em;text-wrap:balance}
+.week{display:flex;align-items:center;gap:6px}
+.week .lbl{font-family:var(--f-display);font-weight:700;font-size:15px;min-width:150px;text-align:center}
+.iconbtn{width:34px;height:34px;border-radius:10px;border:1px solid var(--line);background:var(--surface);display:grid;place-items:center;transition:transform .2s var(--ease),background .2s}
+.iconbtn:hover{background:var(--surface-2)} .iconbtn:active{transform:scale(.94)}
+.actions{display:flex;gap:8px;flex-wrap:wrap}
+.btn{height:36px;padding:0 14px;border-radius:10px;border:1px solid var(--line);background:var(--surface);font-weight:500;display:inline-flex;align-items:center;gap:6px;transition:transform .2s var(--ease),background .2s,border-color .2s}
+.btn:hover{border-color:color-mix(in srgb,var(--ink) 25%,var(--line))} .btn:active{transform:scale(.97)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--bg)}
+.btn.ghost{background:transparent}
+.btn.danger{color:var(--bad)}
+.btn.sm{height:30px;padding:0 10px;font-size:13px;border-radius:8px}
+
+.banner{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:10px 14px;border-radius:12px;background:var(--warn-soft);font-size:13px}
+
+/* tabs */
+.seg{display:inline-flex;background:var(--surface-2);border:1px solid var(--line);border-radius:11px;padding:3px;position:relative}
+.seg button{position:relative;z-index:1;border:0;background:none;padding:6px 14px;border-radius:8px;font-weight:500;color:var(--muted);transition:color .25s}
+.seg button[aria-selected="true"]{color:var(--ink)}
+.seg .pill{position:absolute;top:3px;bottom:3px;border-radius:8px;background:var(--surface);box-shadow:var(--shadow);transition:left .35s var(--ease),width .35s var(--ease)}
+
+.section-head{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap}
+.section-head h2{font-family:var(--f-display);font-size:17px;margin:0}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);align-items:center}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+
+/* week grid */
+.board{background:var(--surface);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);overflow:hidden}
+.scroll{overflow-x:auto}
+table.grid{border-collapse:separate;border-spacing:0;width:100%;min-width:860px}
+.grid th,.grid td{border-bottom:1px solid var(--line);padding:0}
+.grid thead th{background:var(--surface-2);font-weight:500;text-align:left;vertical-align:top}
+.grid tbody tr:last-child td{border-bottom:0}
+.grid .namecol{position:sticky;left:0;z-index:2;background:var(--surface);width:150px;min-width:150px;border-right:1px solid var(--line)}
+.grid thead .namecol{background:var(--surface-2);z-index:3}
+.dayhead{padding:10px 10px 8px;display:flex;flex-direction:column;gap:6px;cursor:pointer;border-radius:0;transition:background .2s;width:100%;border:0;background:none;text-align:left}
+.dayhead:hover{background:color-mix(in srgb,var(--accent-soft) 60%,transparent)}
+.dayhead.sel{background:var(--accent-soft)}
+.dayhead .d1{display:flex;justify-content:space-between;align-items:baseline;gap:6px}
+.dayhead .wd{font-family:var(--f-display);font-weight:700;font-size:14px}
+.dayhead .dt{font-size:12px;color:var(--muted)}
+.status{font-size:11px;display:inline-flex;align-items:center;gap:4px;font-weight:500}
+.status::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+.status.ok{color:var(--ok)} .status.bad{color:var(--bad)} .status.warn{color:var(--warn)}
+.spark{display:grid;grid-template-columns:repeat(24,1fr);gap:1px;height:16px;align-items:end}
+.spark span{background:var(--accent);opacity:.75;border-radius:1px;transition:height .45s var(--ease)}
+.spark span.nohu{background:var(--bad)}
+.person{display:flex;align-items:center;gap:8px;padding:10px 12px;min-width:0}
+.person .nm{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.person .hrs{font-size:11px;color:var(--muted)}
+.tag{font-size:10px;font-weight:700;letter-spacing:.06em;padding:1px 5px;border-radius:5px;flex:none}
+.tag.hu{background:var(--hu-soft);color:var(--hu)}
+.tag.en{background:var(--surface-2);color:var(--muted);border:1px solid var(--line)}
+.cell{width:100%;height:58px;border:0;background:none;padding:6px;display:flex;align-items:stretch;transition:background .2s}
+.cell:hover{background:var(--surface-2)}
+.cell .empty{flex:1;border:1px dashed transparent;border-radius:9px;display:grid;place-items:center;color:transparent;font-size:18px;transition:all .2s}
+.cell:hover .empty{border-color:var(--line);color:var(--muted)}
+.chip{flex:1;border-radius:9px;padding:6px 8px;display:flex;flex-direction:column;justify-content:center;gap:1px;text-align:left;
+  background:var(--accent-soft);color:var(--ink);border-left:3px solid var(--accent);animation:pop .35s var(--ease)}
+.chip.hu{background:var(--hu-soft);border-left-color:var(--hu)}
+.chip b{font-family:var(--f-mono);font-size:12.5px;font-weight:500;font-variant-numeric:tabular-nums}
+.chip small{font-size:11px;color:var(--muted)}
+.selcol{background:color-mix(in srgb,var(--accent-soft) 35%,transparent)}
+@keyframes pop{from{transform:scale(.92);opacity:0}to{transform:none;opacity:1}}
+.addrow td{padding:10px 12px}
+
+/* day view */
+.dayview{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px}
+@media (max-width:900px){.dayview{grid-template-columns:minmax(0,1fr)}}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:16px;min-width:0}
+.tl{min-width:620px;display:grid;grid-template-columns:110px 1fr;row-gap:6px;column-gap:12px;align-items:center}
+.tl .axis{position:relative;height:18px;font-size:11px;color:var(--muted)}
+.tl .axis span{position:absolute;transform:translateX(-50%);font-family:var(--f-mono)}
+.track{position:relative;height:28px;border-radius:8px;background:
+  repeating-linear-gradient(90deg,var(--line) 0 1px,transparent 1px calc(100%/12)) ,var(--surface-2)}
+.bar{position:absolute;top:3px;bottom:3px;border-radius:6px;background:var(--accent);color:var(--bg);font-size:11px;font-family:var(--f-mono);
+  display:flex;align-items:center;padding:0 8px;white-space:nowrap;overflow:hidden;transform-origin:left;animation:grow .55s var(--ease) both}
+.bar.hu{background:var(--hu)}
+@keyframes grow{from{transform:scaleX(0);opacity:.3}to{transform:none;opacity:1}}
+.tl .rl{font-size:13px;display:flex;align-items:center;gap:6px;min-width:0}
+.tl .rl span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tl .sep{grid-column:1/-1;height:1px;background:var(--line);margin:6px 0}
+.cov{position:relative;height:44px;display:grid;grid-template-columns:repeat(24,1fr);gap:2px;align-items:end}
+.cov div{background:var(--accent);border-radius:3px 3px 0 0;position:relative;transition:height .5s var(--ease)}
+.cov div em{position:absolute;top:-15px;left:50%;transform:translateX(-50%);font-style:normal;font-size:10px;color:var(--muted);font-family:var(--f-mono)}
+.hustrip{height:14px;display:grid;grid-template-columns:repeat(24,1fr);gap:2px}
+.hustrip div{border-radius:3px;background:var(--surface-2)}
+.hustrip .y{background:var(--hu)} .hustrip .n{background:var(--bad)}
+.rules{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.rules li{display:flex;gap:10px;align-items:flex-start;font-size:13px;padding:8px 10px;border-radius:10px;background:var(--surface-2)}
+.rules li.bad{background:var(--bad-soft)}
+.rules .ic{flex:none;width:18px;height:18px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:700;color:var(--bg);background:var(--ok);margin-top:1px}
+.rules li.bad .ic{background:var(--bad)}
+.rules small{display:block;color:var(--muted);font-size:12px}
+.daysum{display:flex;gap:18px;flex-wrap:wrap;margin-bottom:14px}
+.daysum div{display:flex;flex-direction:column}
+.daysum b{font-family:var(--f-display);font-size:22px}
+.daysum span{font-size:12px;color:var(--muted)}
+.muted{color:var(--muted)}
+
+/* staff */
+.stafflist{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}
+.staff{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--surface);min-width:0}
+.staff input[type=text]{flex:1;min-width:0;border:0;background:none;font:inherit;font-weight:500;color:var(--ink);padding:4px 0}
+.toggle{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);cursor:pointer;user-select:none}
+.toggle input{appearance:none;width:32px;height:18px;border-radius:9px;background:var(--line);position:relative;transition:background .25s;cursor:pointer;margin:0}
+.toggle input::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--surface);transition:transform .25s var(--ease);box-shadow:0 1px 2px rgba(0,0,0,.2)}
+.toggle input:checked{background:var(--hu)} .toggle input:checked::after{transform:translateX(14px)}
+
+/* modal */
+.scrim{position:fixed;inset:0;background:rgba(10,14,12,.38);z-index:20;display:grid;place-items:center;padding:max(16px,env(safe-area-inset-top,0px)) max(16px,env(safe-area-inset-right,0px)) max(16px,env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));opacity:0;transition:opacity .25s}
+.scrim.show{opacity:1}
+.modal{width:min(640px,100%);max-height:calc(100% - 8px);overflow:auto;background:var(--surface);border:1px solid var(--line);border-radius:18px;box-shadow:0 20px 60px rgba(0,0,0,.25);padding:20px;display:flex;flex-direction:column;gap:14px;transform:translateY(12px) scale(.98);transition:transform .35s var(--ease)}
+.scrim.show .modal{transform:none}
+.modal h3{font-family:var(--f-display);margin:0;font-size:18px}
+.field{display:flex;flex-direction:column;gap:6px;min-width:0}
+.field label{font-size:12px;color:var(--muted);font-weight:500}
+textarea,select,input.inp{font:inherit;color:var(--ink);background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:9px 11px;width:100%}
+textarea{min-height:170px;resize:vertical;font-family:var(--f-mono);font-size:13px;line-height:1.6}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media (max-width:520px){.row2{grid-template-columns:1fr}}
+.preview{display:flex;flex-direction:column;gap:4px}
+.pv{display:grid;grid-template-columns:80px 1fr;gap:10px;font-size:13px;padding:6px 10px;border-radius:8px;background:var(--surface-2);animation:pop .3s var(--ease) both}
+.pv .r{font-family:var(--f-mono)} .pv.off .r{color:var(--muted)} .pv.err{background:var(--bad-soft)}
+.presets{display:flex;flex-wrap:wrap;gap:6px}
+.presets button{border:1px solid var(--line);background:var(--surface-2);border-radius:8px;padding:6px 10px;font-family:var(--f-mono);font-size:12.5px;transition:all .2s}
+.presets button:hover,.presets button.on{border-color:var(--accent);background:var(--accent-soft)}
+.modal .foot{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.modal .foot div{display:flex;gap:8px}
+.hint{font-size:12px;color:var(--muted)}
+.rulegrid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.rulegrid .inp{padding:7px 9px}
+
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translate(-50%,20px);opacity:0;background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:10px;font-size:13px;z-index:30;transition:all .35s var(--ease);pointer-events:none}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+.fade{animation:fadein .4s var(--ease)}
+@keyframes fadein{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="top">
+    <div class="brand"><small>Art of Sushi · Bazilika</small><h1>员工排班</h1></div>
+    <div class="week">
+      <button class="iconbtn" id="prevW" aria-label="上一周">‹</button>
+      <div class="lbl mono" id="weekLbl"></div>
+      <button class="iconbtn" id="nextW" aria-label="下一周">›</button>
+    </div>
+    <div class="actions">
+      <button class="btn primary" id="openImport">＋ 粘贴导入</button>
+      <button class="btn" id="openSettings">规则与备份</button>
+    </div>
+  </header>
+
+  <div class="banner" id="sampleBanner" hidden>
+    <span>现在显示的是示例员工和示例班次，方便看效果。</span>
+    <button class="btn sm" id="clearSample">清空示例，开始使用</button>
+  </div>
+
+  <section class="fade">
+    <div class="section-head" style="margin-bottom:10px">
+      <h2>本周总览</h2>
+      <div class="legend">
+        <span><i style="background:var(--accent)"></i>英语</span>
+        <span><i style="background:var(--hu)"></i>会匈语</span>
+        <span><i style="background:var(--bad)"></i>该时段缺匈语</span>
+        <span>点日期看当天时间轴，点格子改班</span>
+      </div>
+    </div>
+    <div class="board"><div class="scroll"><table class="grid" id="grid"></table></div></div>
+  </section>
+
+  <section class="fade">
+    <div class="section-head" style="margin-bottom:10px">
+      <h2 id="dayTitle">当天时间轴</h2>
+      <div class="seg" id="daySeg"></div>
+    </div>
+    <div class="dayview">
+      <div class="panel"><div class="scroll"><div id="timeline"></div></div></div>
+      <div class="panel">
+        <div class="daysum" id="daySum"></div>
+        <ul class="rules" id="ruleList"></ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="fade">
+    <div class="section-head" style="margin-bottom:10px">
+      <h2>员工</h2>
+      <button class="btn sm" id="addStaff">＋ 添加员工</button>
+    </div>
+    <div class="stafflist" id="staffList"></div>
+  </section>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+const $ = s => document.querySelector(s);
+const WD = ['周一','周二','周三','周四','周五','周六','周日'];
+const OPEN = 11*60, CLOSE = 23*60, SLOT = 30, NSLOT = (CLOSE-OPEN)/SLOT;
+const PRESETS = [['11:00','17:00'],['12:00','17:00'],['17:00','22:00'],['18:00','23:00'],['17:00','23:00'],['11:00','22:00'],['12:00','23:00']];
+const KEY = 'aos-bazilika-roster-v1';
+
+const toMin = t => { const [h,m] = t.split(':').map(Number); return h*60+(m||0); };
+const fmt = m => String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0');
+const iso = d => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+const parseIso = s => { const [y,m,d] = s.split('-').map(Number); return new Date(y,m-1,d); };
+const addDays = (d,n) => { const x = new Date(d); x.setDate(x.getDate()+n); return x; };
+const monday = d => { const x = new Date(d.getFullYear(),d.getMonth(),d.getDate()); const w = (x.getDay()+6)%7; return addDays(x,-w); };
+const dm = d => d.getDate()+'/'+(d.getMonth()+1);
+const uid = () => Math.random().toString(36).slice(2,9);
+const esc = s => String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+const defaultRules = () => ({
+  heads:[{t:'11:00',n:1},{t:'12:00',n:3},{t:'17:00',n:2},{t:'18:00',n:4}],
+  hu:[{s:'12:00',e:'17:00'},{s:'17:00',e:'22:00'}],
+  allDay:{s:'11:00',e:'22:00'}
+});
+
+function sample(){
+  const ws = monday(addDays(new Date(),7));
+  const staff = [
+    {id:'s1',name:'王悦',hu:false},{id:'s2',name:'Anna',hu:true},{id:'s3',name:'陈思',hu:false},
+    {id:'s4',name:'Bence',hu:true},{id:'s5',name:'李婷',hu:true},{id:'s6',name:'黄子轩',hu:false},
+    {id:'s7',name:'林佳',hu:false},{id:'s8',name:'周明',hu:false}];
+  const P = {a:['11:00','17:00'],b:['12:00','17:00'],c:['17:00','22:00'],d:['18:00','23:00'],e:['17:00','23:00'],f:['11:00','22:00',1],g:['12:00','23:00',1]};
+  const plan = { // per day: staffId -> preset
+    0:{s1:'a',s2:'b',s3:'b',s4:'c',s6:'c',s7:'d',s8:'d'},
+    1:{s5:'f',s3:'b',s1:'b',s4:'e',s6:'d',s8:'d'},
+    2:{s1:'a',s2:'b',s7:'b',s5:'c',s3:'c',s6:'d',s8:'d'},
+    3:{s6:'a',s2:'g',s1:'b',s4:'c',s7:'d',s3:'d'},
+    4:{s1:'a',s5:'b',s3:'b',s8:'c',s6:'c',s7:'d',s4:'d'},
+    5:{s2:'f',s1:'a',s6:'b',s3:'b',s5:'e',s7:'d',s8:'d'},
+    6:{s8:'a',s4:'b',s1:'b',s6:'c',s3:'c',s7:'d',s2:'d'}};
+  const shifts = {};
+  for(let i=0;i<7;i++){ const k = iso(addDays(ws,i)); shifts[k]={};
+    for(const [sid,p] of Object.entries(plan[i])){ const v=P[p]; shifts[k][sid]={s:v[0],e:v[1],all:!!v[2]}; } }
+  return {staff,shifts,rules:defaultRules(),sample:true};
+}
+
+let S;
+try { S = JSON.parse(localStorage.getItem(KEY)); } catch(e) { S = null; }
+if(!S || !S.staff) S = sample();
+if(!S.rules) S.rules = defaultRules();
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch(e){} };
+
+let weekStart = monday(addDays(new Date(),7));
+let selDay = 0;
+
+function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toast._t); toast._t=setTimeout(()=>t.classList.remove('show'),1800); }
+
+/* ---------- coverage ---------- */
+function dayShifts(k){ return S.staff.map(p=>({p,sh:(S.shifts[k]||{})[p.id]})).filter(x=>x.sh); }
+function coverage(k){
+  const list = dayShifts(k), heads = new Array(NSLOT).fill(0), hu = new Array(NSLOT).fill(0);
+  for(const {p,sh} of list){ const a=toMin(sh.s), b=toMin(sh.e);
+    for(let i=0;i<NSLOT;i++){ const t=OPEN+i*SLOT; if(t>=a && t<b){ heads[i]++; if(p.hu) hu[i]++; } } }
+  return {heads,hu,list};
+}
+function checks(k){
+  const {heads,hu} = coverage(k), out = [];
+  for(const r of S.rules.heads){ const i=(toMin(r.t)-OPEN)/SLOT; const have = heads[Math.max(0,Math.min(NSLOT-1,Math.floor(i)))]||0;
+    out.push({ok:have>=r.n, title:`${r.t} 在岗至少 ${r.n} 人`, detail:`现在 ${have} 人`+(have<r.n?`，还差 ${r.n-have} 人`:'')}); }
+  for(const w of S.rules.hu){ const a=(toMin(w.s)-OPEN)/SLOT, b=(toMin(w.e)-OPEN)/SLOT; const gaps=[];
+    for(let i=a;i<b;i++){ if(!hu[i]){ const t=OPEN+i*SLOT; if(gaps.length && gaps[gaps.length-1][1]===t) gaps[gaps.length-1][1]=t+SLOT; else gaps.push([t,t+SLOT]); } }
+    out.push({ok:!gaps.length, title:`${w.s}–${w.e} 有会匈语的人`, detail: gaps.length? '缺口 '+gaps.map(g=>fmt(g[0])+'–'+fmt(g[1])).join('、') : '全程覆盖'}); }
+  return out;
+}
+const dur = sh => (toMin(sh.e)-toMin(sh.s))/60;
+
+/* ---------- week grid ---------- */
+function renderGrid(){
+  const days = [...Array(7)].map((_,i)=>addDays(weekStart,i));
+  const end = days[6];
+  $('#weekLbl').textContent = `${dm(days[0])} – ${dm(end)}`;
+  let h = '<thead><tr><th class="namecol"><div class="person"><span class="muted" style="font-size:12px">员工 · 本周工时</span></div></th>';
+  days.forEach((d,i)=>{ const k=iso(d), c=checks(k), bad=c.filter(x=>!x.ok).length, {heads,hu}=coverage(k);
+    const st = bad? `<span class="status bad">${bad} 项未满足</span>` : `<span class="status ok">规则满足</span>`;
+    const max = Math.max(4,...heads);
+    const spark = heads.map((n,j)=>{ const t=OPEN+j*SLOT; const need = S.rules.hu.some(w=>t>=toMin(w.s)&&t<toMin(w.e));
+      return `<span class="${need&&!hu[j]?'nohu':''}" style="height:${Math.max(8,n/max*100)}%;${n?'':'opacity:.18'}"></span>`; }).join('');
+    h += `<th class="${i===selDay?'selcol':''}"><button class="dayhead ${i===selDay?'sel':''}" data-day="${i}">
+      <div class="d1"><span class="wd">${WD[i]}</span><span class="dt mono">${dm(d)}</span></div>
+      <div class="spark" aria-hidden="true">${spark}</div>${st}</button></th>`; });
+  h += '</tr></thead><tbody>';
+  for(const p of S.staff){
+    const tot = days.reduce((a,d)=>{ const sh=(S.shifts[iso(d)]||{})[p.id]; return a+(sh?dur(sh):0); },0);
+    h += `<tr><td class="namecol"><div class="person"><span class="tag ${p.hu?'hu':'en'}">${p.hu?'HU':'EN'}</span><div style="min-width:0;display:flex;flex-direction:column"><span class="nm">${esc(p.name)}</span><span class="hrs mono">${tot}h</span></div></div></td>`;
+    days.forEach((d,i)=>{ const sh=(S.shifts[iso(d)]||{})[p.id];
+      h += `<td class="${i===selDay?'selcol':''}"><button class="cell" data-p="${p.id}" data-day="${i}" aria-label="${esc(p.name)} ${WD[i]}">`+
+        (sh? `<span class="chip ${p.hu?'hu':''}"><b>${sh.s}–${sh.e}</b><small>${sh.all?'全天':label(sh)}</small></span>` : '<span class="empty">＋</span>')+
+        '</button></td>'; });
+    h += '</tr>';
+  }
+  if(!S.staff.length) h += `<tr class="addrow"><td colspan="8" class="muted">还没有员工。点右上角“粘贴导入”，或在下方添加员工。</td></tr>`;
+  h += '</tbody>';
+  $('#grid').innerHTML = h;
+}
+function label(sh){ const a=toMin(sh.s), b=toMin(sh.e);
+  if(b-a>=600) return '全天'; if(b<=17*60) return '白班'; if(a>=17*60) return '晚班'; return dur(sh)+'h'; }
+
+/* ---------- day view ---------- */
+function renderDaySeg(){
+  const seg=$('#daySeg'); seg.innerHTML = '<span class="pill"></span>'+WD.map((w,i)=>`<button role="tab" aria-selected="${i===selDay}" data-day="${i}">${w.slice(1)}</button>`).join('');
+  requestAnimationFrame(movePill);
+}
+function movePill(){ const seg=$('#daySeg'), b=seg.querySelector(`button[data-day="${selDay}"]`), pill=seg.querySelector('.pill'); if(!b) return;
+  pill.style.left=b.offsetLeft+'px'; pill.style.width=b.offsetWidth+'px'; }
+function renderDay(){
+  const d = addDays(weekStart,selDay), k = iso(d);
+  $('#dayTitle').textContent = `${WD[selDay]} ${dm(d)} 时间轴`;
+  const {heads,hu,list} = coverage(k);
+  list.sort((x,y)=>toMin(x.sh.s)-toMin(y.sh.s)||toMin(x.sh.e)-toMin(y.sh.e));
+  const pos = m => ((m-OPEN)/(CLOSE-OPEN)*100);
+  let h = '<div class="tl"><div></div><div class="axis">';
+  for(let t=OPEN;t<=CLOSE;t+=60) h += `<span style="left:${pos(t)}%">${t/60}</span>`;
+  h += '</div>';
+  if(!list.length) h += `<div></div><div class="muted" style="padding:10px 0">这天还没有人排班。在上方表格点格子添加。</div>`;
+  list.forEach(({p,sh},n)=>{ const a=toMin(sh.s), b=toMin(sh.e);
+    h += `<div class="rl"><span class="tag ${p.hu?'hu':'en'}">${p.hu?'HU':'EN'}</span><span>${esc(p.name)}</span></div>
+      <div class="track"><div class="bar ${p.hu?'hu':''}" style="left:${pos(a)}%;width:${pos(b)-pos(a)}%;animation-delay:${n*40}ms">${sh.s}–${sh.e}</div></div>`; });
+  const max = Math.max(4,...heads);
+  h += `<div class="sep"></div><div class="rl muted">在岗人数</div><div class="cov">${heads.map(n=>`<div style="height:${n?Math.max(6,n/max*100):2}%;${n?'':'opacity:.25'}">${n?`<em>${n}</em>`:''}</div>`).join('')}</div>`;
+  h += `<div class="rl muted">匈语覆盖</div><div class="hustrip">${hu.map((n,j)=>{ const t=OPEN+j*SLOT; const need=S.rules.hu.some(w=>t>=toMin(w.s)&&t<toMin(w.e)); return `<div class="${n?'y':need?'n':''}" title="${fmt(t)}"></div>`; }).join('')}</div>`;
+  h += '</div>';
+  $('#timeline').innerHTML = h;
+  const huCount = list.filter(x=>x.p.hu).length, hrs = list.reduce((a,x)=>a+dur(x.sh),0), peak = Math.max(0,...heads);
+  $('#daySum').innerHTML = `<div><b class="mono">${list.length}</b><span>上班人数</span></div><div><b class="mono">${huCount}</b><span>会匈语</span></div><div><b class="mono">${peak}</b><span>同时最多</span></div><div><b class="mono">${hrs}h</b><span>总工时</span></div>`;
+  $('#ruleList').innerHTML = checks(k).map(c=>`<li class="${c.ok?'':'bad'}"><span class="ic">${c.ok?'✓':'!'}</span><div>${c.title}<small>${c.detail}</small></div></li>`).join('');
+}
+
+/* ---------- staff ---------- */
+function renderStaff(){
+  $('#staffList').innerHTML = S.staff.map(p=>`<div class="staff" data-id="${p.id}">
+    <input type="text" id="nm-${p.id}" value="${esc(p.name)}" aria-label="姓名">
+    <label class="toggle"><input type="checkbox" id="hu-${p.id}" ${p.hu?'checked':''}>匈语</label>
+    <button class="btn sm ghost danger" data-del="${p.id}">删除</button></div>`).join('') || '<p class="muted">暂无员工。</p>';
+}
+function renderAll(){ renderGrid(); renderDaySeg(); renderDay(); renderStaff(); $('#sampleBanner').hidden = !S.sample; }
+
+/* ---------- parser ---------- */
+const CN = {一:0,二:1,三:2,四:3,五:4,六:5,日:6,天:6};
+const EN = {mon:0,tue:1,wed:2,thu:3,fri:4,sat:5,sun:6,'hét':0,ked:1,sze:2,csü:3,'pén':4,szo:5,vas:6};
+function parseText(text, ws){
+  const res = [], names = [];
+  for(const raw of text.split(/\r?\n/)){
+    const line = raw.trim(); if(!line) continue;
+    let date=null, wd=null, sh=null, off=false;
+    let m = line.match(/(\d{1,2})\s*月\s*(\d{1,2})/);
+    if(m) date={m:+m[1],d:+m[2]};
+    else if((m = line.match(/(?:^|\D)(\d{1,2})\s*\/\s*(\d{1,2})(?!\s*[:：]|\d)/))) date={d:+m[1],m:+m[2]};
+    if(date && (date.m<1||date.m>12||date.d<1||date.d>31)) date=null;
+    m = line.match(/(?:周|星期|礼拜)\s*([一二三四五六日天])/); if(m) wd=CN[m[1]];
+    else { m = line.toLowerCase().match(/\b(mon|tue|wed|thu|fri|sat|sun)/); if(m) wd=EN[m[1]]; }
+    let rest = line.replace(/(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?/,'').replace(/(?:^|\D)\d{1,2}\s*\/\s*\d{1,2}(?!\s*[:：]|\d)/,' ');
+    const tm = rest.match(/(\d{1,2})(?:\s*[:：.]\s*(\d{2}))?\s*(?:-|–|—|~|～|至|到|to)\s*(\d{1,2})(?:\s*[:：.]\s*(\d{2}))?/i);
+    if(/全天|all\s*day|full/i.test(line)) sh={s:S.rules.allDay.s,e:S.rules.allDay.e,all:true};
+    else if(tm){ const a=+tm[1]*60+(+tm[2]||0), b=+tm[3]*60+(+tm[4]||0); if(b>a) sh={s:fmt(a),e:fmt(b),all:false}; }
+    else if(/休|off|不上|没班|无|^x$|—\s*$|-\s*$/i.test(rest)) off=true;
+    if(date===null && wd===null && !sh){ const n=line.replace(/[:：,，].*$/,'').trim(); if(n && n.length<=20) names.push(n); continue; }
+    let key=null;
+    if(date){ let y = ws.getFullYear(); const cand=[y-1,y,y+1].map(yy=>new Date(yy,date.m-1,date.d));
+      cand.sort((a,b)=>Math.abs(a-ws)-Math.abs(b-ws)); key=iso(cand[0]); }
+    else if(wd!==null) key=iso(addDays(ws,wd));
+    res.push({line,key,wd:key?(parseIso(key).getDay()+6)%7:wd,sh,off, err:!key||(!sh&&!off)});
+  }
+  return {rows:res, name:names[0]||''};
+}
+
+/* ---------- modal ---------- */
+function openModal(html, onMount){
+  const sc = document.createElement('div'); sc.className='scrim';
+  sc.innerHTML = `<div class="modal" role="dialog" aria-modal="true">${html}</div>`;
+  document.body.appendChild(sc); requestAnimationFrame(()=>sc.classList.add('show'));
+  const close = () => { sc.classList.remove('show'); setTimeout(()=>sc.remove(),260); document.removeEventListener('keydown',onKey); };
+  const onKey = e => { if(e.key==='Escape') close(); };
+  document.addEventListener('keydown',onKey);
+  sc.addEventListener('mousedown',e=>{ if(e.target===sc) close(); });
+  onMount(sc.querySelector('.modal'), close);
+}
+
+function importModal(){
+  const opts = S.staff.map(p=>`<option value="${p.id}">${esc(p.name)}${p.hu?' · HU':''}</option>`).join('');
+  const ex = [...Array(7)].map((_,i)=>{ const d=addDays(weekStart,i); return `${dm(d)} ${WD[i]} ${['11:00 - 17:00','休息','17:00 - 23:00','全天','12:00 - 17:00','18:00 - 23:00','休息'][i]}`; }).join('\n');
+  openModal(`<h3>粘贴员工发来的时间</h3>
+    <div class="field"><label for="imText">消息内容（可以连名字一起粘贴）</label><textarea id="imText" placeholder="${ex}"></textarea>
+    <span class="hint">支持“3/11 周一 11:00 - 17:00”、“11-17”、“全天”、“休息”。全天按 ${S.rules.allDay.s}–${S.rules.allDay.e} 计，可在“规则与备份”里改。</span></div>
+    <div class="row2">
+      <div class="field"><label for="imWho">这是谁的时间</label><select id="imWho"><option value="__new">＋ 新员工</option>${opts}</select></div>
+      <div class="field" id="newWrap"><label for="imName">新员工姓名</label><input class="inp" id="imName" placeholder="姓名"></div>
+    </div>
+    <label class="toggle" id="huWrap"><input type="checkbox" id="imHu">会说匈牙利语</label>
+    <div class="field"><label>识别结果</label><div class="preview" id="imPrev"><span class="hint">粘贴后这里会显示每一天的识别结果。</span></div></div>
+    <div class="foot"><span class="hint" id="imInfo"></span><div><button class="btn ghost" id="imCancel">取消</button><button class="btn primary" id="imOk">填入排班</button></div></div>`,
+  (m, close) => {
+    const ta=m.querySelector('#imText'), who=m.querySelector('#imWho'), nm=m.querySelector('#imName');
+    let parsed = {rows:[],name:''};
+    const syncWho = () => { const isNew = who.value==='__new'; m.querySelector('#newWrap').hidden=!isNew; m.querySelector('#huWrap').hidden=!isNew; };
+    const update = () => {
+      parsed = parseText(ta.value, weekStart);
+      if(parsed.name){ const hit=S.staff.find(p=>p.name.toLowerCase()===parsed.name.toLowerCase()); if(hit){ who.value=hit.id; } else if(who.value==='__new' && !nm.value) nm.value=parsed.name; syncWho(); }
+      m.querySelector('#imPrev').innerHTML = parsed.rows.length ? parsed.rows.map((r,i)=>{
+        const d = r.key? parseIso(r.key) : null;
+        const left = d? `${WD[r.wd]} ${dm(d)}` : (r.wd!=null?WD[r.wd]:'?');
+        const right = r.sh? `${r.sh.s} – ${r.sh.e}${r.sh.all?'  全天':''}` : r.off? '休息' : '没认出时间：'+esc(r.line);
+        return `<div class="pv ${r.err&&!r.off?'err':''} ${r.off?'off':''}" style="animation-delay:${i*30}ms"><span>${left}</span><span class="r">${right}</span></div>`; }).join('')
+        : '<span class="hint">粘贴后这里会显示每一天的识别结果。</span>';
+      const ok = parsed.rows.filter(r=>r.key&&(r.sh||r.off)).length;
+      m.querySelector('#imInfo').textContent = parsed.rows.length? `识别 ${ok}/${parsed.rows.length} 行` : '';
+    };
+    ta.addEventListener('input',update); who.addEventListener('change',syncWho); syncWho();
+    setTimeout(()=>ta.focus(),50);
+    m.querySelector('#imCancel').onclick = close;
+    m.querySelector('#imOk').onclick = () => {
+      let pid = who.value;
+      if(pid==='__new'){ const n=nm.value.trim(); if(!n){ nm.focus(); toast('先填员工姓名'); return; }
+        const ex=S.staff.find(p=>p.name===n); if(ex) pid=ex.id; else { pid=uid(); S.staff.push({id:pid,name:n,hu:m.querySelector('#imHu').checked}); } }
+      const good = parsed.rows.filter(r=>r.key&&(r.sh||r.off));
+      if(!good.length){ toast('没有识别到日期和时间'); return; }
+      for(const r of good){ S.shifts[r.key] = S.shifts[r.key]||{}; if(r.sh) S.shifts[r.key][pid]={...r.sh}; else delete S.shifts[r.key][pid]; }
+      weekStart = monday(parseIso(good[0].key)); S.sample=false; save(); close(); renderAll();
+      toast(`已填入 ${good.length} 天`);
+    };
+  });
+}
+
+function editModal(pid, di){
+  const p = S.staff.find(x=>x.id===pid), d=addDays(weekStart,di), k=iso(d), cur=(S.shifts[k]||{})[pid];
+  const times=[]; for(let t=OPEN;t<=CLOSE;t+=SLOT) times.push(fmt(t));
+  const sel=(id,v)=>`<select id="${id}" class="mono">${times.map(t=>`<option ${t===v?'selected':''}>${t}</option>`).join('')}</select>`;
+  openModal(`<h3>${esc(p.name)} · ${WD[di]} ${dm(d)}</h3>
+    <div class="field"><label>常用班次</label><div class="presets">${PRESETS.map(([a,b])=>`<button data-s="${a}" data-e="${b}" class="${cur&&cur.s===a&&cur.e===b?'on':''}">${a}–${b}</button>`).join('')}</div></div>
+    <div class="row2"><div class="field"><label for="edS">开始</label>${sel('edS',cur?cur.s:'11:00')}</div><div class="field"><label for="edE">结束</label>${sel('edE',cur?cur.e:'17:00')}</div></div>
+    <label class="toggle"><input type="checkbox" id="edAll" ${cur&&cur.all?'checked':''}>标记为全天</label>
+    <div class="foot"><div>${cur?'<button class="btn danger" id="edDel">设为休息</button>':''}</div><div><button class="btn ghost" id="edCancel">取消</button><button class="btn primary" id="edOk">保存</button></div></div>`,
+  (m, close) => {
+    m.querySelectorAll('.presets button').forEach(b=>b.onclick=()=>{ m.querySelector('#edS').value=b.dataset.s; m.querySelector('#edE').value=b.dataset.e;
+      m.querySelectorAll('.presets button').forEach(x=>x.classList.toggle('on',x===b)); m.querySelector('#edAll').checked = toMin(b.dataset.e)-toMin(b.dataset.s)>=600; });
+    m.querySelector('#edCancel').onclick=close;
+    const del=m.querySelector('#edDel'); if(del) del.onclick=()=>{ delete S.shifts[k][pid]; S.sample=false; save(); close(); renderAll(); toast('已改为休息'); };
+    m.querySelector('#edOk').onclick=()=>{ const s=m.querySelector('#edS').value, e=m.querySelector('#edE').value;
+      if(toMin(e)<=toMin(s)){ toast('结束时间要晚于开始'); return; }
+      S.shifts[k]=S.shifts[k]||{}; S.shifts[k][pid]={s,e,all:m.querySelector('#edAll').checked}; S.sample=false; save(); close(); selDay=di; renderAll(); toast('已保存'); };
+  });
+}
+
+function settingsModal(){
+  const R = S.rules;
+  openModal(`<h3>规则与备份</h3>
+    <div class="field"><label>每个时间点至少在岗人数</label><div class="rulegrid" id="rHeads">${R.heads.map((r,i)=>`<input class="inp mono" id="rh-t${i}" value="${r.t}" aria-label="时间"><input class="inp mono" id="rh-n${i}" type="number" min="0" value="${r.n}" aria-label="人数">`).join('')}</div>
+      <span class="hint">例：12:00 至少 3 人，就是 11 点那位加上 12 点来的 2 位。</span></div>
+    <div class="field"><label>必须有人会匈语的时段</label><div class="rulegrid">${R.hu.map((w,i)=>`<input class="inp mono" id="rw-s${i}" value="${w.s}" aria-label="开始"><input class="inp mono" id="rw-e${i}" value="${w.e}" aria-label="结束">`).join('')}</div></div>
+    <div class="field"><label>“全天”按这个时间计算</label><div class="rulegrid"><input class="inp mono" id="ad-s" value="${R.allDay.s}"><input class="inp mono" id="ad-e" value="${R.allDay.e}"></div></div>
+    <div class="field"><label for="bk">备份数据（复制保存；换设备时粘贴回来再点“载入备份”）</label><textarea id="bk" style="min-height:90px">${esc(JSON.stringify(S))}</textarea></div>
+    <div class="foot"><div><button class="btn" id="bkCopy">复制备份</button><button class="btn" id="bkLoad">载入备份</button></div><div><button class="btn ghost" id="stCancel">取消</button><button class="btn primary" id="stOk">保存规则</button></div></div>`,
+  (m, close) => {
+    const valid = t => /^\d{1,2}:\d{2}$/.test(t);
+    m.querySelector('#stCancel').onclick=close;
+    m.querySelector('#bkCopy').onclick=()=>{ const ta=m.querySelector('#bk'); navigator.clipboard.writeText(ta.value).then(()=>toast('已复制')).catch(()=>{ ta.select(); toast('已选中，手动复制'); }); };
+    m.querySelector('#bkLoad').onclick=()=>{ try{ const x=JSON.parse(m.querySelector('#bk').value); if(!x.staff||!x.shifts) throw 0; S=x; if(!S.rules) S.rules=defaultRules(); save(); close(); renderAll(); toast('已载入备份'); }catch(e){ toast('备份格式不对，请粘贴完整内容'); } };
+    m.querySelector('#stOk').onclick=()=>{
+      const heads=R.heads.map((r,i)=>({t:m.querySelector('#rh-t'+i).value.trim(),n:+m.querySelector('#rh-n'+i).value||0}));
+      const hu=R.hu.map((w,i)=>({s:m.querySelector('#rw-s'+i).value.trim(),e:m.querySelector('#rw-e'+i).value.trim()}));
+      const ad={s:m.querySelector('#ad-s').value.trim(),e:m.querySelector('#ad-e').value.trim()};
+      if(![...heads.map(h=>h.t),...hu.flatMap(w=>[w.s,w.e]),ad.s,ad.e].every(valid)){ toast('时间格式写成 12:00'); return; }
+      const pad=t=>fmt(toMin(t));
+      S.rules={heads:heads.map(h=>({t:pad(h.t),n:h.n})),hu:hu.map(w=>({s:pad(w.s),e:pad(w.e)})),allDay:{s:pad(ad.s),e:pad(ad.e)}};
+      save(); close(); renderAll(); toast('规则已更新'); };
+  });
+}
+
+/* ---------- events ---------- */
+$('#prevW').onclick=()=>{ weekStart=addDays(weekStart,-7); renderAll(); };
+$('#nextW').onclick=()=>{ weekStart=addDays(weekStart,7); renderAll(); };
+$('#openImport').onclick=importModal;
+$('#openSettings').onclick=settingsModal;
+$('#clearSample').onclick=()=>{ S={staff:[],shifts:{},rules:S.rules||defaultRules(),sample:false}; save(); renderAll(); toast('示例已清空'); };
+$('#grid').addEventListener('click',e=>{
+  const c=e.target.closest('.cell'); if(c){ editModal(c.dataset.p,+c.dataset.day); return; }
+  const h=e.target.closest('.dayhead'); if(h){ selDay=+h.dataset.day; renderAll(); document.getElementById('dayTitle').scrollIntoView({behavior:'smooth',block:'start'}); }
+});
+$('#daySeg').addEventListener('click',e=>{ const b=e.target.closest('button'); if(!b) return; selDay=+b.dataset.day;
+  $('#daySeg').querySelectorAll('button').forEach(x=>x.setAttribute('aria-selected',x===b)); movePill(); renderGrid(); renderDay(); });
+$('#addStaff').onclick=()=>{ const id=uid(); S.staff.push({id,name:'新员工',hu:false}); save(); renderAll(); const i=document.getElementById('nm-'+id); i.focus(); i.select(); };
+$('#staffList').addEventListener('change',e=>{ const card=e.target.closest('.staff'); if(!card) return; const p=S.staff.find(x=>x.id===card.dataset.id);
+  if(e.target.type==='checkbox') p.hu=e.target.checked; else p.name=e.target.value.trim()||p.name; save(); renderGrid(); renderDay(); });
+$('#staffList').addEventListener('click',e=>{ const b=e.target.closest('[data-del]'); if(!b) return; const id=b.dataset.del;
+  if(b.dataset.armed){ S.staff=S.staff.filter(x=>x.id!==id); for(const k in S.shifts) delete S.shifts[k][id]; save(); renderAll(); toast('已删除'); }
+  else { b.dataset.armed=1; b.textContent='确认删除'; setTimeout(()=>{ if(b.isConnected){ delete b.dataset.armed; b.textContent='删除'; } },2500); } });
+window.addEventListener('resize',movePill);
+
+const today = new Date(); if(iso(monday(today))===iso(weekStart)) selDay=(today.getDay()+6)%7;
+renderAll();
+})();
+</script>
+
+</body>
+</html>
